@@ -1,0 +1,2 @@
+cd "D:\Portfolio\portfolio"
+   npm run dev
