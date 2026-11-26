@@ -1,51 +1,128 @@
+import { get, put } from '@vercel/blob';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { NextResponse } from 'next/server';
 import { defaultContent, type PortfolioContent } from '@/lib/content';
 import { isAdminRequest } from '@/lib/admin-auth';
+import {
+  BlobStorageConfigurationError,
+  hasBlobStorageConfiguration,
+  portfolioContentBlobPath,
+  requireBlobStorageCredentials,
+  shouldUseBlobStorage,
+} from '@/lib/blob-storage';
 
 const contentPath = path.join(process.cwd(), 'data', 'content.json');
+const noStoreHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
 
-async function readContent(): Promise<PortfolioContent> {
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
+function mergeContent(storedContent: Partial<PortfolioContent>): PortfolioContent {
+  return {
+    ...defaultContent,
+    ...storedContent,
+    site: { ...defaultContent.site, ...(storedContent.site ?? {}) },
+  };
+}
+
+async function readLocalContent(): Promise<PortfolioContent> {
   try {
     const storedContent = JSON.parse(await fs.readFile(contentPath, 'utf8')) as Partial<PortfolioContent>;
-    return {
-      ...defaultContent,
-      ...storedContent,
-      site: { ...defaultContent.site, ...storedContent.site },
-    };
+    return mergeContent(storedContent);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw error;
     }
-    await fs.mkdir(path.dirname(contentPath), { recursive: true });
-    await fs.writeFile(contentPath, JSON.stringify(defaultContent, null, 2), 'utf8');
     return defaultContent;
   }
 }
 
+async function readContent(): Promise<PortfolioContent> {
+  if (!shouldUseBlobStorage() || !hasBlobStorageConfiguration()) {
+    return readLocalContent();
+  }
+
+  requireBlobStorageCredentials();
+  const blob = await get(portfolioContentBlobPath, { access: 'private', useCache: false });
+  if (!blob || blob.statusCode !== 200 || !blob.stream) {
+    return readLocalContent();
+  }
+
+  const storedContent = JSON.parse(await new Response(blob.stream).text()) as Partial<PortfolioContent>;
+  return mergeContent(storedContent);
+}
+
+async function writeContent(content: PortfolioContent) {
+  if (!shouldUseBlobStorage()) {
+    await fs.mkdir(path.dirname(contentPath), { recursive: true });
+    await fs.writeFile(contentPath, JSON.stringify(content, null, 2), 'utf8');
+    return;
+  }
+
+  requireBlobStorageCredentials();
+  await put(portfolioContentBlobPath, JSON.stringify(content, null, 2), {
+    access: 'private',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+    cacheControlMaxAge: 60,
+  });
+}
+
+function isPortfolioContent(value: unknown): value is PortfolioContent {
+  if (typeof value !== 'object' || value === null) return false;
+  const content = value as Partial<PortfolioContent>;
+  return typeof content.site === 'object' && content.site !== null &&
+    Array.isArray(content.skills) &&
+    Array.isArray(content.projects) &&
+    Array.isArray(content.experiences) &&
+    Array.isArray(content.certificates) &&
+    Array.isArray(content.featuredCertificateIndexes) &&
+    Array.isArray(content.services) &&
+    Array.isArray(content.faqs);
+}
+
+function storageErrorResponse(error: unknown, action: 'load' | 'save') {
+  if (error instanceof BlobStorageConfigurationError) {
+    return NextResponse.json({ error: error.message }, { status: 503, headers: noStoreHeaders });
+  }
+
+  console.error(`Unable to ${action} portfolio content.`, error);
+  return NextResponse.json(
+    { error: `Unable to ${action} portfolio content. Please check the server logs.` },
+    { status: 500, headers: noStoreHeaders },
+  );
+}
+
 export async function GET() {
   try {
-    return NextResponse.json(await readContent());
-  } catch {
-    return NextResponse.json({ error: 'Unable to load portfolio content.' }, { status: 500 });
+    return NextResponse.json(await readContent(), { headers: noStoreHeaders });
+  } catch (error) {
+    return storageErrorResponse(error, 'load');
   }
 }
 
 export async function PUT(request: Request) {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: 'Admin authentication required.' }, { status: 401 });
+    return NextResponse.json({ error: 'Admin authentication required.' }, { status: 401, headers: noStoreHeaders });
+  }
+
+  let content: unknown;
+  try {
+    content = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Request body must be valid JSON.' }, { status: 400, headers: noStoreHeaders });
+  }
+
+  if (!isPortfolioContent(content)) {
+    return NextResponse.json({ error: 'Invalid portfolio content.' }, { status: 400, headers: noStoreHeaders });
   }
 
   try {
-    const content = (await request.json()) as PortfolioContent;
-    if (!content?.site || !Array.isArray(content.skills) || !Array.isArray(content.projects) || !Array.isArray(content.experiences) || !Array.isArray(content.certificates) || !Array.isArray(content.featuredCertificateIndexes) || !Array.isArray(content.services) || !Array.isArray(content.faqs)) {
-      return NextResponse.json({ error: 'Invalid portfolio content.' }, { status: 400 });
-    }
-    await fs.mkdir(path.dirname(contentPath), { recursive: true });
-    await fs.writeFile(contentPath, JSON.stringify(content, null, 2), 'utf8');
-    return NextResponse.json({ ok: true, content });
-  } catch {
-    return NextResponse.json({ error: 'Unable to save portfolio content.' }, { status: 500 });
+    await writeContent(content);
+    return NextResponse.json({ ok: true, content }, { headers: noStoreHeaders });
+  } catch (error) {
+    return storageErrorResponse(error, 'save');
   }
 }

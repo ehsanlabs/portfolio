@@ -41,9 +41,10 @@ export default function AdminPage() {
   useEffect(() => {
     if (!loggedIn) return;
     fetch('/api/content').then(async (response) => {
-      if (!response.ok) throw new Error('Unable to load content.');
-      setContent(await response.json());
-    }).catch((loadError: Error) => setError(loadError.message));
+      const result = await response.json() as PortfolioContent & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? 'Unable to load content.');
+      setContent(result);
+    }).catch((loadError: unknown) => setError(loadError instanceof Error ? loadError.message : 'Unable to load content.'));
   }, [loggedIn]);
 
   async function login(event: FormEvent) {
@@ -63,10 +64,16 @@ export default function AdminPage() {
     setSaving(true);
     setMessage('');
     setError('');
-    const response = await fetch('/api/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(content) });
-    if (!response.ok) setError((await response.json()).error ?? 'Save failed.');
-    else setMessage('Changes saved. Refresh the public page to see them.');
-    setSaving(false);
+    try {
+      const response = await fetch('/api/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(content) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) setError(result.error ?? 'Save failed.');
+      else setMessage('Changes saved. Refresh the public page to see them.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Unable to save portfolio content.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function uploadCertificateImage(index: number, file: File) {
