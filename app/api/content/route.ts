@@ -6,7 +6,6 @@ import { defaultContent, isPortfolioContent, type PortfolioContent } from '@/lib
 import { isAdminRequest } from '@/lib/admin-auth';
 import {
   BlobStorageConfigurationError,
-  hasBlobStorageConfiguration,
   portfolioContentBlobPath,
   requireBlobStorageCredentials,
   shouldUseBlobStorage,
@@ -39,18 +38,23 @@ async function readLocalContent(): Promise<PortfolioContent> {
 }
 
 async function readContent(): Promise<PortfolioContent> {
-  if (!shouldUseBlobStorage() || !hasBlobStorageConfiguration()) {
-    return readLocalContent();
-  }
+  if (!shouldUseBlobStorage()) return readLocalContent();
 
   requireBlobStorageCredentials();
   const blob = await get(portfolioContentBlobPath, { access: 'private', useCache: false });
   if (!blob || blob.statusCode !== 200 || !blob.stream) {
-    return readLocalContent();
+    throw new BlobContentNotFoundError();
   }
 
   const storedContent = JSON.parse(await new Response(blob.stream).text()) as Partial<PortfolioContent>;
   return mergeContent(storedContent);
+}
+
+class BlobContentNotFoundError extends Error {
+  constructor() {
+    super('Portfolio content was not found in the connected Vercel Blob store.');
+    this.name = 'BlobContentNotFoundError';
+  }
 }
 
 async function writeContent(content: PortfolioContent) {
@@ -73,6 +77,9 @@ async function writeContent(content: PortfolioContent) {
 function storageErrorResponse(error: unknown, action: 'load' | 'save') {
   if (error instanceof BlobStorageConfigurationError) {
     return NextResponse.json({ error: error.message }, { status: 503, headers: noStoreHeaders });
+  }
+  if (error instanceof BlobContentNotFoundError) {
+    return NextResponse.json({ error: error.message }, { status: 404, headers: noStoreHeaders });
   }
 
   console.error(`Unable to ${action} portfolio content.`, error);

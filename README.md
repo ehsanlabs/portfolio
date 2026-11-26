@@ -21,7 +21,7 @@ Open [http://localhost:3000](http://localhost:3000). For API credentials and loc
 
 ## Admin content storage
 
-The admin API uses local `data/content.json` storage during normal local development. For Vercel, create a **private Vercel Blob** store and connect it to this project for Production and Preview. Vercel supplies the Blob OIDC environment automatically; do not commit Blob tokens. To use the connected store locally, also connect the Development environment and run `vercel env pull`.
+The admin API uses local `data/content.json` storage during normal local development. For Vercel, create a **private Vercel Blob** store and connect it to this project for Production and Preview. Vercel Functions resolve Blob OIDC authentication at request time; `BLOB_STORE_ID` is sufficient in that runtime, and the Blob SDK handles token resolution. Do not commit Blob tokens. Local development uses the JSON file unless `BLOB_READ_WRITE_TOKEN` is configured; `BLOB_STORE_ID` alone does not enable local OIDC access.
 
 ## Live Demo
 
