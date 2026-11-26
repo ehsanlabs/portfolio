@@ -70,6 +70,19 @@ export type PortfolioContent = {
   faqs: Faq[];
 };
 
+export function isPortfolioContent(value: unknown): value is PortfolioContent {
+  if (typeof value !== 'object' || value === null) return false;
+  const content = value as Partial<PortfolioContent>;
+  return typeof content.site === 'object' && content.site !== null &&
+    Array.isArray(content.skills) &&
+    Array.isArray(content.projects) &&
+    Array.isArray(content.experiences) &&
+    Array.isArray(content.certificates) &&
+    Array.isArray(content.featuredCertificateIndexes) &&
+    Array.isArray(content.services) &&
+    Array.isArray(content.faqs);
+}
+
 export function certificateSlug(title: string) {
   return title.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }

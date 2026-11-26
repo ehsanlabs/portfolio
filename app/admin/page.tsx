@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { LogOut, Plus, Save, Trash2, ArrowLeft, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
-import type { Certificate, Experience, Faq, PortfolioContent, Project, Service, Skill } from '@/lib/content';
+import { isPortfolioContent, type Certificate, type Experience, type Faq, type PortfolioContent, type Project, type Service, type Skill } from '@/lib/content';
 import { normalizeDriveDownloadUrl, normalizeImageUrl } from '@/lib/image-url';
 
 type Collection = 'projects' | 'experiences' | 'certificates' | 'skills' | 'services' | 'faqs';
@@ -33,6 +33,8 @@ export default function AdminPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [content, setContent] = useState<PortfolioContent | null>(null);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [collection, setCollection] = useState<Collection>('projects');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -40,12 +42,47 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!loggedIn) return;
-    fetch('/api/content').then(async (response) => {
-      const result = await response.json() as PortfolioContent & { error?: string };
-      if (!response.ok) throw new Error(result.error ?? 'Unable to load content.');
-      setContent(result);
-    }).catch((loadError: unknown) => setError(loadError instanceof Error ? loadError.message : 'Unable to load content.'));
-  }, [loggedIn]);
+    const controller = new AbortController();
+    let active = true;
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    async function loadContent() {
+      setLoadingContent(true);
+      setError('');
+      try {
+        const response = await fetch('/api/content', { signal: controller.signal });
+        let result: unknown;
+        try {
+          result = await response.json();
+        } catch {
+          throw new Error(`Content API returned an invalid response (HTTP ${response.status}).`);
+        }
+        const apiError = typeof result === 'object' && result !== null && 'error' in result && typeof result.error === 'string'
+          ? result.error
+          : undefined;
+        if (!response.ok) throw new Error(apiError ?? `Unable to load content (HTTP ${response.status}).`);
+        if (!isPortfolioContent(result)) throw new Error('Content API returned invalid portfolio content.');
+        setContent(result);
+      } catch (loadError: unknown) {
+        if (!active) return;
+        if (controller.signal.aborted) {
+          setError('Loading portfolio content timed out. Please try again.');
+        } else {
+          setError(loadError instanceof Error ? loadError.message : 'Unable to load content.');
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        if (active) setLoadingContent(false);
+      }
+    }
+
+    void loadContent();
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [loggedIn, loadAttempt]);
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -55,6 +92,7 @@ export default function AdminPage() {
       setError((await response.json()).error ?? 'Login failed.');
       return;
     }
+    setLoadingContent(true);
     setLoggedIn(true);
     setPassword('');
   }
@@ -153,7 +191,32 @@ export default function AdminPage() {
     );
   }
 
-  if (!content) return <main className="flex min-h-screen items-center justify-center bg-[#05070c] text-cyan-300">Loading dashboard…</main>;
+  if (!content) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#05070c] px-4 text-cyan-300">
+        <div className="max-w-lg text-center" aria-live="polite">
+          {loadingContent ? (
+            <p role="status">Loading dashboard…</p>
+          ) : (
+            <>
+              <p role="alert" className="text-red-200">{error || 'Unable to load portfolio content.'}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setLoadingContent(true);
+                  setLoadAttempt((attempt) => attempt + 1);
+                }}
+                className="mt-4 rounded-xl border border-cyan-400/40 px-4 py-2 font-medium text-cyan-200 transition hover:bg-cyan-400/10"
+              >
+                Try again
+              </button>
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   const updateProject = (index: number, patch: Partial<Project>) => setContent({ ...content, projects: content.projects.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
   const updateExperience = (index: number, patch: Partial<Experience>) => setContent({ ...content, experiences: content.experiences.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });

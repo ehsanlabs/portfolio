@@ -2,7 +2,7 @@ import { get, put } from '@vercel/blob';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { NextResponse } from 'next/server';
-import { defaultContent, type PortfolioContent } from '@/lib/content';
+import { defaultContent, isPortfolioContent, type PortfolioContent } from '@/lib/content';
 import { isAdminRequest } from '@/lib/admin-auth';
 import {
   BlobStorageConfigurationError,
@@ -68,19 +68,6 @@ async function writeContent(content: PortfolioContent) {
     contentType: 'application/json',
     cacheControlMaxAge: 60,
   });
-}
-
-function isPortfolioContent(value: unknown): value is PortfolioContent {
-  if (typeof value !== 'object' || value === null) return false;
-  const content = value as Partial<PortfolioContent>;
-  return typeof content.site === 'object' && content.site !== null &&
-    Array.isArray(content.skills) &&
-    Array.isArray(content.projects) &&
-    Array.isArray(content.experiences) &&
-    Array.isArray(content.certificates) &&
-    Array.isArray(content.featuredCertificateIndexes) &&
-    Array.isArray(content.services) &&
-    Array.isArray(content.faqs);
 }
 
 function storageErrorResponse(error: unknown, action: 'load' | 'save') {
